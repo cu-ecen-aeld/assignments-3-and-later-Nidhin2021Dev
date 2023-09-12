@@ -16,8 +16,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+if(system(cmd) != 0)
+{
+	exit(EXIT_FAILURE);
+	return false;
+}
 
-    return true;
+return true;
 }
 
 /**
@@ -58,8 +63,39 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+va_end(args);
+ if (command[0][0] != '/') {
+        // Command does not include an absolute path
+        fprintf(stderr, "Absolute path required\n");
+        return false;
+    }
 
-    va_end(args);
+    pid_t pid;
+
+    pid = fork();
+    if (pid < 0) {
+        perror("Fork failed\n"); 
+        return false;
+    } else if (pid == 0) {
+        // Child process
+        execv(command[0], command);
+	    perror("Execv Failed"); 
+	    return false;
+    } else {
+        // Parent process
+        int status;
+        if (waitpid(pid, &status, 0) == -1)
+            return false;
+        else if (WIFEXITED(status)) {
+            int exitStatus = WEXITSTATUS(status);
+            return exitStatus == 0;    
+	    } else {
+            perror("Child process terminated abnormally\n"); 
+            return false;
+        }
+    }
+
+    
 
     return true;
 }
@@ -92,8 +128,40 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
-
-    va_end(args);
+va_end(args);
+int status;
+int kidpid;
+int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+if (fd < 0) { perror("open"); abort(); }
+switch (kidpid = fork()) 
+{
+  case -1: 
+  perror("fork"); 
+  abort();
+  case 0:
+    if (dup2(fd, 1) < 0) 
+    { 
+    perror("dup2"); 
+    abort(); 
+    }
+    close(fd);
+    execvp(command[0], command); 
+    perror("execvp"); 
+    return false;
+  default:
+    close(fd);
+    /* do whatever the parent wants to do. */
+    if (waitpid (kidpid, &status, 0) == -1) 
+    {
+    //meaning wait for any child process whose process group ID is equal to that of the calling process. 
+        return false;
+    }
+    else if (WIFEXITED(status)) 
+    {
+        int exitStatus = WEXITSTATUS(status);
+        return exitStatus == 0;   
+    }
+}
 
     return true;
 }
