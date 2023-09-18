@@ -3,8 +3,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+
 // Optional: use these functions to add debug or error prints to your application
-#define DEBUG_LOG(msg,...)
+#define DEBUG_LOG(msg,...) printf("threading DEBUG: " msg "\n" , ##__VA_ARGS__)
 //#define DEBUG_LOG(msg,...) printf("threading: " msg "\n" , ##__VA_ARGS__)
 #define ERROR_LOG(msg,...) printf("threading ERROR: " msg "\n" , ##__VA_ARGS__)
 
@@ -17,21 +18,30 @@ void* threadfunc(void* thread_param)
     struct thread_data *tdata = (struct thread_data *)thread_param;
     int s = 0;
     
-    usleep(tdata->wait_to_obtain_ms * 1000);
+    tdata->thread_complete_success = false;
+    struct timespec ts_sleep;
+    ts_sleep.tv_sec = tdata->wait_to_obtain_ms / 1000;
+    ts_sleep.tv_nsec = (tdata->wait_to_obtain_ms % 1000) * 1000000;
+    DEBUG_LOG("Start sleep..");
+    nanosleep(&ts_sleep, NULL);
+
+    DEBUG_LOG("Lock mutex..");
     // Apply mutex lock
     s = pthread_mutex_lock(tdata->mutex);
     if (s != 0){
-        perror("pthread_mutex_lock");
-        tdata->thread_complete_success = false;
+        perror("pthread_mutex_unlock failed.");
         return thread_param;
     }
-    // do work
-    usleep(tdata->wait_to_release_ms * 1000);
+    // Wait to release
+    ts_sleep.tv_sec = tdata->wait_to_release_ms / 1000;
+    ts_sleep.tv_nsec = (tdata->wait_to_release_ms % 1000) * 1000000;
+    nanosleep(&ts_sleep, NULL);
+
+    DEBUG_LOG("Unlock mutex..");
     // Unlock from mutex
     s = pthread_mutex_unlock(tdata->mutex);
     if (s != 0){
-        perror("pthread_mutex_unlock");
-        tdata->thread_complete_success = false;
+        perror("pthread_mutex_unlock failed.");
         return thread_param;
     }
     tdata->thread_complete_success = true;
@@ -67,13 +77,13 @@ bool start_thread_obtaining_mutex(pthread_t *thread, pthread_mutex_t *mutex,int 
     DEBUG_LOG("Main thread, PID %d TID %d", getpid(), (pid_t)syscall(SYS_gettid));
     
     // Create the thread
-    s = pthread_create(thread, NULL, threadfunc, tdata);
+    s = pthread_create(thread, NULL, &threadfunc, (void *)tdata);
     if (s != 0){
         ERROR_LOG("Failed to create thread");
         perror("pthread_create");
         free(tdata);
         return false;
     }
-    return false;
+    return true;
 }
 
