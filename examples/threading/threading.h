@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <pthread.h>
-
+#include <unistd.h>
+#include <sys/syscall.h>
 /**
  * This structure should be dynamically allocated and passed as
  * an argument to your thread using pthread_create.
@@ -14,7 +15,12 @@ struct thread_data{
      * between the start_thread_obtaining_mutex function and
      * your thread implementation.
      */
-
+    // pre mutex lock delay
+    int wait_to_obtain_ms;
+    // pre mutex un-lock delay
+    int wait_to_release_ms;
+    // pointer to mutex
+    pthread_mutex_t *mutex;
     /**
      * Set to true if the thread completed with success, false
      * if an error occurred.
