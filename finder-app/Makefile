@@ -1,18 +1,26 @@
-#AARCH_64_CC = aarch64-none-linux-gnu-gcc
-CC = aarch64-none-linux-gnu-gcc
-#CC = gcc
+DEFAULT_CC = gcc 
+CC = $(DEFAULT_CC)
 
-CFLAGS = -Wall
+ifdef CROSS_COMPILE
+	CC = $(CROSS_COMPILE)$(DEFAULT_CC)
+endif
 
-SRC = writer.c
-EXEC = writer 
-OBJ = $(SRC:.c=.o)
-$(EXEC):$(SRC)
-	$(CC) $(CFLAGS) -c $(SRC) -o $(OBJ)
-	$(CC) $(OBJ) -o $(EXEC)
+CFLAGS = -Wall -Werror
+LDFLAGS = 
 
-#CROSS_COMPILE:$(SRC)
-#	$(AARCH_64_CC) $(CFLAGS) -c $(SRC) -o $(OBJ)
-#	$(AARCH_64_CC) $(OBJ) -o $(EXEC)
+SRCS = writer.c
+
+OBJS = $(SRCS:.c=.o)
+
+TARGET = writer
+
+all: $(TARGET)
+		
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(TARGET): $(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^
+
 clean:
-	rm -f writer
+	rm -f $(OBJS) $(TARGET)
