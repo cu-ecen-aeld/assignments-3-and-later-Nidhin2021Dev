@@ -1,3 +1,4 @@
+//#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -10,13 +11,15 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 
 #define LOGGING_CLIENT_DATA_PATH "/var/tmp/aesdsocketdata"
 
 int socket_fd = 0, client_fd = 0;
 const int max_connection = 10;
 struct sockaddr_in addr;
-int addr_size = sizeof(struct sockaddr_in);
+socklen_t addr_size = sizeof(struct sockaddr_in);
 char client_addr[INET_ADDRSTRLEN];
 int data_buffer_size = sizeof(char) * 512;
 char *data_buffer;
