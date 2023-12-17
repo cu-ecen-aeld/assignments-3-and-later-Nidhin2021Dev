@@ -1,235 +1,486 @@
-//#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/ip.h>
-#include <signal.h>
-#include <syslog.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <unistd.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <syslog.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/queue.h>
+#include <sys/stat.h>
+#include <sys/times.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
-
-#define LOGGING_CLIENT_DATA_PATH "/var/tmp/aesdsocketdata"
-
-int socket_fd = 0, client_fd = 0;
-const int max_connection = 10;
-struct sockaddr_in addr;
-socklen_t addr_size = sizeof(struct sockaddr_in);
-char client_addr[INET_ADDRSTRLEN];
-int data_buffer_size = sizeof(char) * 512;
-char *data_buffer;
-bool daemon_b = false;
+#include <netdb.h>
+#include <pthread.h>
+#include <time.h>
+#include <linux/fs.h>
 
 
+#define BACKLOG 10
+#define BUFFER_SIZE 1024  
+#define PORT "9000"  
 
-int read_from_aesdsockdata(char *data, int *buffer_size)
+const char *DATA_FILE = "/var/tmp/aesdsocketdata";
+
+
+typedef struct threads{
+    pthread_t ids;
+    int client_fd;
+    bool complete;
+    TAILQ_ENTRY(threads) nodes;
+}node_t;
+
+typedef TAILQ_HEAD(head_s, threads) head_t;
+head_t head;
+
+
+static void signal_handler(int signo);
+void *thread_func(void* thread_param);
+void *cleanup(void* clean_args);
+void *timestamp_func(void *timestamp);
+void free_queue(head_t * head);
+node_t* _fill_queue(head_t * head, const pthread_t threadid, const int threadclientid);
+
+
+int count_nodes, count_nodes1;
+int sock_fd , newsock_fd , fd ;
+int status , sockstat , listenstat ,  thread_ret ,bindstat;
+
+
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_t timestampthread;
+pthread_t threadc;
+
+
+int main(int argc, char *argv[])
 {
-	int fd = open(LOGGING_CLIENT_DATA_PATH, O_RDWR|O_APPEND|O_CREAT, S_IRWXO|S_IRWXG|S_IRWXU);
-	
-	if (fd == -1)
-	{
-		exit(-1);
-	}
-	
-	int counter = 0;
-	int res = -1;
-	
-	
-	while((res = read(fd, &data[counter], 1)) == 1)
-    {
-        if (res == -1)
-        {
-            exit(-1);
-        }
+    struct addrinfo hints; 
+    struct addrinfo *servinfo = NULL;
+    struct sockaddr_in store;
+    socklen_t addr_size; 
+    
+    // Create a socket
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = PF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    hints.ai_protocol = 0;
 
-        if (data_buffer[counter] == '\0')
+    char ipaddress[INET_ADDRSTRLEN];
+    
+    memset(ipaddress, 0, sizeof ipaddress);
+    
+    int yes = 1;
+    
+    // Open log
+    openlog(NULL, LOG_CONS, LOG_USER);
+    
+    // Register signal_handler
+    if(signal(SIGINT, signal_handler) == SIG_ERR)
+    {
+        syslog(LOG_ERR,"SIGINT");
+        closelog();
+    }
+    if(signal(SIGTERM, signal_handler) == SIG_ERR)
+    {
+        syslog(LOG_ERR,"SIGTERM");
+        closelog();
+    }
+    if(signal(SIGKILL, signal_handler) == SIG_ERR)
+    {
+        syslog(LOG_ERR,"SIGKILL");
+        closelog();
+    }
+    
+    // Returns addrinfo structures
+    if((status = getaddrinfo(NULL, PORT, &hints, &servinfo))!=0)
+    {
+        fprintf(stderr, "getaddrinfo error: %s\n",gai_strerror(status));
+        closelog();
+        return -1;
+    }
+
+    // Obtain socket file file descriptor
+    sock_fd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+    if(sock_fd == -1)
+    {
+        perror("Server: socket");
+        syslog(LOG_ERR,"Server: socket");
+        closelog();
+        return -1;
+    }   
+    
+    // Avoid the already in use message
+    sockstat = setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+    if(sockstat == -1)
+    {
+        perror("Server: setsockopt");
+        syslog(LOG_ERR,"Server: setsockopt");
+        close(sock_fd);
+        closelog();
+        return -1;
+    }
+    
+    // Bind socket to port and assign an address
+    bindstat = bind(sock_fd, servinfo->ai_addr, servinfo->ai_addrlen);
+    if(bindstat == -1)
+    {
+        perror("Server: bind");
+        syslog(LOG_ERR,"Server: bind");
+        close(sock_fd);
+        closelog();
+        return -1;
+    }
+    
+    remove(DATA_FILE);
+    
+    // Check if -d argument is present and fork daemon
+    if(bindstat == 0)
+    {
+        
+        if(argc ==2 && (!strcmp(argv[1],"-d")))
+        {
+            daemon(0,0);
+ 
+        }
+    }
+    
+    freeaddrinfo(servinfo);
+
+    // Listen for incoming connections
+    listenstat= listen(sock_fd, BACKLOG);
+    if(listenstat == -1)
+    {
+        perror("Server: listen");
+        syslog(LOG_ERR,"Server: listen");
+        closelog();
+        close(sock_fd);
+        return -1;
+    }
+    
+    TAILQ_INIT(&head);
+    
+    // Clean pthread
+    int thread_clean = pthread_create(&threadc, NULL, cleanup, NULL);
+    if(thread_clean!= 0)
+    {
+            perror("pthread_create cleanup");
+            syslog(LOG_ERR,"pthread_create cleanup");
+            return -1;
+    }
+     
+    // Create timestamp  
+    int timestampret = pthread_create(&timestampthread, NULL, timestamp_func, NULL);
+    if(timestampret != 0){
+        perror("pthread_create timestamp");
+        syslog(LOG_ERR, "Error: Timestamp thread creation failed: %s", strerror(errno));
+        return -1;
+    }
+
+    while(1)
+    {
+    	// Accept incoming connection
+        addr_size = sizeof(store);
+        newsock_fd = accept(sock_fd, (struct sockaddr *)&store, &addr_size);
+        if(newsock_fd == -1)
+        {
+            perror("Server: accept");
+            syslog(LOG_ERR,"Server: accept");
+            raise(SIGTERM);
+            return -1;
+        }
+        
+        // Get address of the connected client
+        if(store.sin_family == AF_INET)
+        {
+            inet_ntop(AF_INET, &store.sin_addr, ipaddress, INET_ADDRSTRLEN);
+            syslog(LOG_DEBUG,"Accepted connection from %s",ipaddress);
+        }
+        
+        node_t *current = NULL;
+        current = _fill_queue(&head, 0, newsock_fd);
+        
+        // Create new thread for the accepted connection
+        thread_ret = pthread_create(&(current->ids), NULL, thread_func, (void *)current);
+        if(thread_ret)
+        {
+                perror("pthread_create");
+                exit(EXIT_FAILURE);
+        }
+        
+    }     
+    closelog();
+    close(sock_fd); 
+    close(newsock_fd);
+    return 0;
+}   
+
+
+void *thread_func(void* thread_param)
+{
+    struct threads *thread_func_args = thread_param;
+    
+    int bytesread, ret;        
+            
+    char buf[BUFFER_SIZE];
+    char send_buf[BUFFER_SIZE];
+    
+    memset(buf,0,BUFFER_SIZE);
+    memset(send_buf,0,BUFFER_SIZE);
+    
+    //Mutex lock
+    pthread_mutex_lock(&mutex);
+    fd = open(DATA_FILE, O_RDWR | O_CREAT | O_APPEND, 0777);
+    if(fd < 0)
+    {
+        closelog();
+    } 
+    
+    
+    while(1)
+    {
+        // Receive data packets
+        bytesread = recv(thread_func_args->client_fd, buf, sizeof(buf), 0);
+        if(bytesread == -1)
+        {
+            pthread_mutex_unlock(&mutex);
+            perror("Server: recv");
+            syslog(LOG_ERR,"Server: recv");
+            pthread_exit(NULL);
+        }
+          
+        // Append data to open file
+        ret = write(fd, buf, bytesread);
+        if(ret == -1)
+        {
+            pthread_mutex_unlock(&mutex);
+            perror("Write failed");
+            syslog(LOG_ERR,"Write failed");
+        }
+        
+        if(buf[bytesread-1] == '\n')
+            break;
+            
+    }
+    
+    lseek(fd, 0, SEEK_SET);
+    while(1)
+    {
+        ret = read(fd, send_buf, BUFFER_SIZE); 
+        if(ret<0)
+        {
+            perror("Read failed");
+            syslog(LOG_ERR,"Read failed");
+            pthread_exit(NULL);
+        }
+        
+        // Send response of data from file
+        int bytes_sent = send(thread_func_args->client_fd, send_buf, ret, 0);
+        if(bytes_sent == -1)
+        {
+            perror("Server: send");
+            syslog(LOG_ERR,"Server: send");
+            pthread_exit(NULL);
+        }
+        
+        
+        if(!ret)
         {
             break;
         }
+    }
 
-        counter++;
+    thread_func_args->complete = 1;
+    close(fd);
+    shutdown(thread_func_args->client_fd, SHUT_RDWR);
+    pthread_mutex_unlock(&mutex);
+    return NULL;
+}
 
-        if ((counter) >= *buffer_size)
+
+void *cleanup(void* clean_args)
+{
+    while(1)
+    {
+        node_t *tmp = NULL;
+        TAILQ_FOREACH(tmp, &head, nodes)
         {
-            *buffer_size += 512;
-            data = realloc(data, *buffer_size);
+            if(tmp->complete == 1)
+            {
+                syslog(LOG_DEBUG,"Cleaning thread %ld with complete value %d", tmp->ids, tmp->complete);
+                
+                if((pthread_join(tmp->ids, NULL))!=0)
+                {
+                    syslog(LOG_ERR,"pthread_join failed from cleanup");
+                }
+                TAILQ_REMOVE(&head, tmp, nodes);
+                free(tmp);
+                tmp = NULL;
+                count_nodes1++;
+                break;    
+            }
         }
-    }
-	
-	close(fd);
-	
-	return counter;
-	
+        usleep(10);
+    }       
+    return NULL;        
 }
 
-void write_to_aesdsockdata(char *data, const int len)
-{
-	int fd = open(LOGGING_CLIENT_DATA_PATH, O_RDWR|O_APPEND|O_CREAT, S_IRWXO|S_IRWXG|S_IRWXU);
-	
-	if (fd == -1)
-	{
-		exit(-1);
-	}
-	
-	write(fd, data_buffer, len);
-	
-	close(fd);
-}
 
-void before_exit()
+void *timestamp_func(void *timestamp)
 {
-	if (data_buffer != NULL)
-        free(data_buffer);
-
-    if (client_fd == -1 || client_fd == 0)
+    while(1)
     {
-        close(client_fd);
+       char outstr[200] ={0};
+           time_t t;
+           struct tm *tmp;
+           
+           t = time(NULL);
+           tmp = localtime(&t);
+           if (tmp == NULL) {
+               perror("localtime");
+           }
+
+           if (strftime(outstr, sizeof(outstr),"timestamp: %a %d %b %Y %T", tmp) == 0) 
+           {
+               perror("strftime error");
+               syslog(LOG_ERR,"strftime error");
+           }
+           
+           strcat(outstr,"\n");
+
+        // Mutex lock
+        pthread_mutex_lock(&mutex);
+        
+        fd = open(DATA_FILE, O_RDWR | O_CREAT | O_APPEND, 0777);
+        if(fd < 0)
+        {
+            printf("File not created for timestamp\n");
+        }
+        else
+        {
+            printf("File created successfully in append mode for timestamp\n");
+        }   
+
+        // Write data to the file opened
+        int stampret = write(fd, outstr, strlen(outstr));
+        if(stampret == -1)
+        {
+            perror("Write failed");
+            syslog(LOG_ERR,"Write failed");
+        }
+        close(fd);
+        
+        // Mutex unlock
+        pthread_mutex_unlock(&mutex);   
+
+        sleep(10);
     }
 
-    if (socket_fd == -1 || socket_fd == 0)
-    {
-        shutdown(socket_fd, SHUT_RDWR); 
-    }
-	
-	closelog();
-	
-	remove(LOGGING_CLIENT_DATA_PATH);
-	
 }
 
-void hande_signal()
-{
-    syslog(LOG_USER, "Caught signal, exiting");
-    exit(0);
-}
-
-
-int main(int argc, char **argv)
-{
-	
-	for (int i = 0; i < argc; i++)
-	{
-		
-		if (strcmp(argv[i], "-d") == 0)
-		{
-			daemon_b = true;
-		}
-	}
-
-    openlog("aesdsocket", 0, LOG_USER);
     
-    data_buffer = (char *) malloc(data_buffer_size);
-    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    addr = (struct sockaddr_in){.sin_family = AF_INET, .sin_port = htons(9000), .sin_addr = (struct in_addr){.s_addr = INADDR_ANY}};
+// Signal handler for SIGINT and SIGTERM
+static void signal_handler(int signo)
+{
+        syslog(LOG_DEBUG,"Caught signal, exiting");
 
-    signal(SIGTERM, hande_signal);
-    signal(SIGINT, hande_signal);
-	
-	int option = 1;
-	
-	if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option)) == -1)
-	{
-		exit(-1);
-	}
-	
-	if (atexit(&before_exit))
-	{
-		exit(-1);
-	}
+        node_t *handle = NULL;
+        TAILQ_FOREACH(handle, &head, nodes)
+        {
+            if((shutdown(handle->client_fd, SHUT_RDWR)) == -1)
+            {
+            	syslog(LOG_ERR,"Shutdown failure from threads");
+            }
+            
+            if((pthread_kill(handle->ids, SIGKILL))!=0)
+            {
+            	syslog(LOG_ERR,"Unable to kill thread");
+            }
+            
+        }
+        
+        free_queue(&head);
+        pthread_mutex_destroy(&mutex);
+        
+        syslog(LOG_DEBUG,"Mutex destroyed");
+        
+        if(shutdown(sock_fd, SHUT_RDWR) == -1)
+        {
+        	perror("Signal Handler : Shutdown");
+        	syslog(LOG_ERR,"Shutdown failure");
+        	closelog();
+        }
+        
+        if((pthread_kill(threadc,SIGKILL)!=0))
+        {
+        	syslog(LOG_ERR,"threadc FAILURE");
+        }
+        
+        if((pthread_kill(timestampthread,SIGKILL))!=0)
+        {
+        	syslog(LOG_ERR,"timestampthread FAILURE");
+        }
+        
+        if(sock_fd)
+        {
+        	close(sock_fd);
+        	syslog(LOG_ERR,"sock_fd FAILURE");   
+        }
+        
+        if(newsock_fd)
+        {
+		close(newsock_fd);
+		syslog(LOG_ERR,"newsock_fd FAILURE");
+        }
+        
+        if(fd)
+        {
+        	close(fd);
+        	syslog(LOG_ERR,"fd FAILURE");
+        }
+        
+        unlink(DATA_FILE);
+        closelog();
+}
 
-    if (socket_fd == -1)
+
+// Manages the linked list of given threads
+node_t* _fill_queue(head_t * head, const pthread_t threadid, const int threadclientid)
+{
+    struct threads *e = malloc(sizeof(struct threads));
+    if(e == NULL)
     {
-        exit(-1);
+        printf("Malloc Unsuccessfull\n");
+        exit(EXIT_FAILURE);
     }
+    e->ids = threadid;
+    e->client_fd = threadclientid;
+    e->complete = 0;
+    TAILQ_INSERT_TAIL(head,e,nodes);
+    e = NULL;
+
+    count_nodes++;
+
+    return TAILQ_LAST(head, head_s);
+}
 
 
-    if (bind(socket_fd, (struct sockaddr *) &addr, sizeof(struct sockaddr_in)))
+// Removes all elements from the queue
+void free_queue(head_t * head)
+{
+    struct threads *e = NULL;
+    while(!TAILQ_EMPTY(head))
     {
-        exit(-1);
+        e = TAILQ_FIRST(head);
+        TAILQ_REMOVE(head,e,nodes);
+        free(e);
+        e = NULL;
     }
-
-    if (listen(socket_fd, max_connection) == -1)
-    {
-        exit(-1);
-    }
-	
-	if (daemon_b)
-	{
-		pid_t pid = fork();
-
-		if (pid != 0)
-		{
-			exit(0);
-		}
-	}
-
-	while (1)
-	{
-		
-		client_fd = accept(socket_fd, (struct sockaddr *) &addr, &addr_size);
-		
-		if (client_fd == -1)
-		{
-			exit(-1);
-		}
-
-
-		inet_ntop(AF_INET, &addr.sin_addr, client_addr, INET_ADDRSTRLEN);
-
-		syslog(LOG_USER, "Accepted connection from %s", client_addr);
-
-		int counter = 0;
-		int res;
-
-		while((res = read(client_fd, &data_buffer[counter], 1)) == 1)
-		{
-			if (res == -1)
-			{
-				hande_signal();
-			}
-
-			if (data_buffer[counter] == '\n' || data_buffer[counter] == '\0')
-			{
-				break;
-			}
-
-			counter++;
-
-			if ((counter) >= data_buffer_size)
-			{
-				data_buffer_size += 512;
-				data_buffer = realloc(data_buffer, data_buffer_size);
-			}
-		}
-
-		if ((counter + 2) >= data_buffer_size)
-		{
-			data_buffer_size += 512;
-			data_buffer = realloc(data_buffer, data_buffer_size);
-		}
-
-		char *newline = strchr(data_buffer, '\n');
-
-		*(newline + 1) = '\0';
-
-		
-		
-		write_to_aesdsockdata(data_buffer, (newline-data_buffer) + 1);
-		
-		int data_to_send = read_from_aesdsockdata(data_buffer, &data_buffer_size);
-		
-		write(client_fd, data_buffer, data_to_send);
-		
-		close(client_fd);
-	}
-
-
-	
-	return -1;
-
 }

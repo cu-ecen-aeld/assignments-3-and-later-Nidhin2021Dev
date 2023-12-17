@@ -1,26 +1,19 @@
-DEFAULT_CC = gcc 
-CC = $(DEFAULT_CC)
+CC = $(CROSS_COMPILE)gcc
 
-ifdef CROSS_COMPILE
-	CC = $(CROSS_COMPILE)$(DEFAULT_CC)
-endif
+HFILES = 
+CFILES = aesdsocket.c
 
-CFLAGS = -Wall -Werror
-LDFLAGS = 
+SRCS = ${HFILES} ${CFILES}
+OBJS = ${CFILES:.c=.o}
 
-SRCS = aesdsocket.c
+CFLAGS += -Wall -Werror
+LDFLAGS += 
 
-OBJS = $(SRCS:.c=.o)
-
-TARGET = aesdsocket
-
-all: $(TARGET)
-		
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+all: aesdsocket
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	-rm -f *.o *.d
+	-rm -f aesdsocket
+
+aesdsocket: $(OBJS)
+	$(CC) $(CFLAGS) $(OBJS) -o aesdsocket  -lpthread
