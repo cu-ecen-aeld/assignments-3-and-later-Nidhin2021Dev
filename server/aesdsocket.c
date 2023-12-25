@@ -37,6 +37,11 @@ void handle_signals(int sgno)
 
 	close(sockfd);
 	int ret = chdir("/var/tmp");
+	if(ret < 0)
+	{
+		perror("/var/tmp Failed");
+		exit(-1);
+	}
 	remove("aesdsocketdata");
 	syslog(LOG_ALERT, "Caught signal exiting");
 	exit(0);
@@ -50,6 +55,11 @@ int send_data(int connfd, FILE *fp)
 	fseek(fp, 0L, SEEK_SET);
 	int ret = fread(data, sizeof(char), size, fp);
 	ret = write(connfd, data, size);
+	if(ret < 0)
+	{
+		perror("write Failed");
+		exit(-1);
+	}
 	free(data);
 	return 0;
 }
@@ -165,6 +175,7 @@ int main(int c, char **argv)
 		/* stdout */
 		 ret = dup(0);
 		/* stderror */
+		close(ret);
 	}
 
 	pthread_create(&timestamp_thread, NULL, write_time, NULL);
