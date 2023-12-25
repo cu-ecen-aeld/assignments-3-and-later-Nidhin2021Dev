@@ -36,7 +36,7 @@ void handle_signals(int sgno)
 {
 
 	close(sockfd);
-	chdir("/var/tmp");
+	(void)chdir("/var/tmp");
 	remove("aesdsocketdata");
 	syslog(LOG_ALERT, "Caught signal exiting");
 	exit(0);
@@ -48,8 +48,8 @@ int send_data(int connfd, FILE *fp)
 	int size = ftell(fp);
 	char *data = calloc(sizeof(char), size);
 	fseek(fp, 0L, SEEK_SET);
-	fread(data, sizeof(char), size, fp);
-	write(connfd, data, size);
+	(void)fread(data, sizeof(char), size, fp);
+	(void)write(connfd, data, size);
 	free(data);
 	return 0;
 }
@@ -161,9 +161,9 @@ int main(int c, char **argv)
 		/* redirect fd's 0,1,2 to /dev/null */
 		open("/dev/null", O_RDWR);
 		/* stdin */
-		dup(0);
+		(void)dup(0);
 		/* stdout */
-		dup(0);
+		(void)dup(0);
 		/* stderror */
 	}
 
