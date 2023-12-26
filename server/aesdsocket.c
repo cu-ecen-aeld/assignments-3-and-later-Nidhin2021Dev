@@ -147,7 +147,11 @@ int main(int argc, char *argv[])
         
         if(argc ==2 && (!strcmp(argv[1],"-d")))
         {
-            daemon(0,0);
+            int ret = daemon(0,0);
+            if(ret < 0)
+            {
+            perror("daemon: error");
+            }
  
         }
     }
