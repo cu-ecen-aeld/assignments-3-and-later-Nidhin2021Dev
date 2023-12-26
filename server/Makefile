@@ -1,4 +1,4 @@
-CC = $(CROSS_COMPILE)gcc
+CC ?= $(CROSS_COMPILE)gcc
 
 HFILES = 
 CFILES = aesdsocket.c
@@ -6,7 +6,7 @@ CFILES = aesdsocket.c
 SRCS = ${HFILES} ${CFILES}
 OBJS = ${CFILES:.c=.o}
 
-CFLAGS += -Wall -Werror
+CFLAGS ?= -Wall -Werror
 LDFLAGS += 
 
 all: aesdsocket
