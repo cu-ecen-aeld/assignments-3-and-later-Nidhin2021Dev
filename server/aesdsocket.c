@@ -175,7 +175,12 @@ int main(int c, char **argv)
 		/* stdout */
 		 ret = dup(0);
 		/* stderror */
-		close(ret);
+		if(ret < 0 )
+		{
+		perror("daemon failed");
+		exit(-1);
+		}
+		//close(ret);
 	}
 
 	pthread_create(&timestamp_thread, NULL, write_time, NULL);
